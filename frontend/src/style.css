@@ -1,0 +1,80 @@
+﻿:root {
+  font-family: Inter, system-ui, sans-serif;
+  color: #202837;
+  background: #f3f6fa;
+  line-height: 1.5;
+  font-synthesis: none;
+}
+* { box-sizing: border-box; }
+body { margin: 0; min-width: 320px; }
+h1, h2, h3, p { margin-top: 0; }
+h1 { font-size: clamp(1.65rem, 3vw, 2.3rem); margin-bottom: .35rem; line-height: 1.15; letter-spacing: -.035em; }
+h2 { font-size: 1.12rem; margin-bottom: .6rem; }
+h3 { font-size: 1rem; margin-bottom: .3rem; }
+p { margin-bottom: .75rem; }
+button, input, textarea { font: inherit; }
+button, .button {
+  display: inline-block;
+  cursor: pointer;
+  border: 1px solid #cbd5e3;
+  border-radius: 8px;
+  padding: .47rem .8rem;
+  color: #202837;
+  background: white;
+  text-decoration: none;
+  font-weight: 600;
+  line-height: 1.4;
+}
+button:hover:not(:disabled), .button:hover { border-color: #4e65a1; }
+button:disabled { opacity: .55; cursor: default; }
+:focus-visible { outline: 3px solid #7d9aef; outline-offset: 2px; }
+a { color: #304fa0; }
+.primary { background: #344fa0; border-color: #344fa0; color: white; }
+.primary:hover:not(:disabled) { background: #263c81; }
+.danger { color: #a02340; }
+.small { font-size: .78rem; }
+.top { background: #17233e; color: white; padding: 14px clamp(18px, 4vw, 56px); }
+.brand { display: flex; align-items: center; gap: 10px; font-size: 1.13rem; font-weight: 750; }
+.mark { display: grid; width: 30px; height: 30px; place-items: center; border-radius: 8px; background: #4160ba; }
+.layout { display: grid; grid-template-columns: minmax(200px, 260px) minmax(0, 1fr); min-height: calc(100vh - 58px); }
+.sidebar { background: #fff; border-right: 1px solid #dfe6f0; padding: 24px 16px; }
+.sidebar h2 { margin: 0; font-size: .94rem; }
+.sidebar > .muted { margin-top: .75rem; }
+.section { margin-top: 26px; }
+.section > h2 { margin-bottom: 8px; }
+.nav, .target-row { display: block; width: 100%; text-align: left; overflow-wrap: anywhere; margin: 6px 0; }
+.nav { border-color: transparent; color: #374660; }
+.nav.selected, .tabs button[aria-pressed=true] { color: #233c87; background: #e9efff; border-color: #bfd0fa; }
+.nav small, .target-row small { display: block; color: #55637b; }
+main { width: 100%; max-width: 1210px; margin: 0 auto; padding: clamp(16px, 4vw, 44px); }
+.panel { background: white; border: 1px solid #dfe6f0; padding: clamp(16px, 3vw, 26px); border-radius: 14px; margin-bottom: 16px; }
+.empty { padding-block: 48px; }
+.between, .actions, .metrics { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; }
+.between { justify-content: space-between; }
+.heading { margin-bottom: 12px; }
+.breadcrumb { margin-bottom: 4px; font-size: .9rem; }
+.muted, small { color: #526177; }
+.break { overflow-wrap: anywhere; }
+.pill { background: #edf2fc; color: #29447d; border-radius: 999px; padding: 3px 10px; font-size: .78rem; font-weight: 750; }
+.alert { background: #fff0f2; color: #8d2538; padding: 10px 14px; border-radius: 8px; margin-bottom: 14px; }
+.tabs { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+.item { border-top: 1px solid #dfe6f0; padding: 16px 0 8px; margin-top: 10px; }
+.metrics { margin: 10px 0 15px; }
+label { display: grid; gap: .3rem; margin: 8px 0 13px; font-weight: 600; }
+.check { display: flex; align-items: center; }
+.check input { width: auto; }
+input, textarea { min-width: 0; width: 100%; color: inherit; border-radius: 7px; border: 1px solid #cbd5e3; background: #fff; padding: .52rem .6rem; }
+textarea { resize: vertical; }
+fieldset { border: 1px solid #dfe6f0; border-radius: 8px; margin: 0 0 12px; }
+.fields, .limits { display: grid; gap: 0 12px; grid-template-columns: repeat(auto-fit, minmax(145px, 1fr)); }
+details { padding: 8px 0; }
+summary { cursor: pointer; font-weight: 600; }
+summary small { margin-left: 8px; }
+pre, .code { font: .88rem ui-monospace, monospace; }
+pre { overflow: auto; padding: 10px; max-height: 320px; background: #f3f6fa; }
+progress { width: 100%; height: 12px; margin-bottom: 12px; accent-color: #344fa0; }
+@media (max-width: 640px) {
+  .layout { grid-template-columns: 1fr; }
+  .sidebar { border-right: 0; border-bottom: 1px solid #dfe6f0; padding: 14px 16px; }
+  .section { margin-top: 14px; }
+}
