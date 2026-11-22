@@ -1,4 +1,4 @@
-﻿# Agent universel de test E2E
+# Agent universel de test E2E
 
 L’interface React permet de gérer des projets et leurs cibles, d’explorer une application, de revoir les scénarios générés et de lancer une campagne Playwright. Flask conserve les campagnes et les résultats en base. Les preuves et les rapports HTML sont enregistrés dans `storage/`.
 
@@ -12,7 +12,7 @@ Depuis la racine du projet, dans PowerShell.
 py -3.11 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r backend/requirements.txt
 .\.venv\Scripts\python.exe -m playwright install chromium
-Copy-Item backend/.env.example backend/.env -NoClobber
+
 npm.cmd --prefix frontend ci
 ```
 
@@ -77,3 +77,24 @@ Les variables sont enregistrées dans la base locale et leurs valeurs sont masqu
 
 
 
+
+
+Crée exactement deux scénarios indépendants, chacun dans une session de navigateur vierge. Utilise les variables d’identifiants telles quelles dans les actions fill. Pour soumettre chaque formulaire, cible le bouton de connexion par son nom visible ou par un sélecteur précis dans le formulaire. N’utilise pas le sélecteur générique button.
+
+Scénario 1 — Accès administrateur autorisé
+
+1. Ouvre http://localhost:5174/admin. Vérifie avec url_equals que la redirection mène à http://localhost:5174/admin/login.
+2. Renseigne {account_admin_email} et {account_admin_password}, puis soumets le formulaire. Vérifie avec url_equals que l’URL devient http://localhost:5174/admin. Si le navigateur reste sur /admin/login, considère la connexion comme non confirmée.
+3. Ouvre http://localhost:5174/admin/users. Vérifie avec url_equals que cette URL est atteinte et, si possible, vérifie qu’un élément propre à la gestion des utilisateurs est visible.
+4. Si le total global des utilisateurs est affiché, relève son texte avec read_text en ciblant l’élément qui affiche ce total. Ne compte pas les lignes visibles d’une liste paginée. Si le sélecteur du total n’est pas connu, indique qu’il doit être confirmé avant l’exécution.
+5. Déconnecte-toi avec le contrôle prévu par l’application. Vérifie que le formulaire de connexion administrateur est de nouveau visible.
+
+Scénario 2 — Accès administrateur refusé à un utilisateur standard
+
+1. Ouvre http://localhost:5174/login. Connecte-toi avec {account_user_email} et {account_user_password}.
+2. Vérifie que la connexion a réussi avec un indicateur réservé aux utilisateurs connectés, comme le menu du compte ou un bouton de déconnexion. Si la connexion n’est pas confirmée, considère le test d’accès comme non concluant.
+
+
+
+
+on va se connecter en premier dans http://localhost:5174/login avec l'adresse {account_1_email} et le mot de passe {account_1_password} puis on va acceder a la page http://localhost:5174/products verifier le nom de produit {item} est visible et acceder a la page de produit lire le prix d'achat et l'afficher puis ajouter 3 au panier ensuite on va aller a http://localhost:5174/cart pour verifier que l'element est au panier et confirmer la reservation qui va nous envoyer a la page http://localhost:5174/checkout ou on va afficher le total et puis confirmer en cliquant sur le bouton de confirmation , elle va nous envoyer a la page http://localhost:5174/profile ou il s'jaoute un nouveau element en attente dans mes demandes appele {item} puis on va se deconnecter qui va nous redirectionner vers http://localhost:5174/
