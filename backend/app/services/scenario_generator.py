@@ -279,6 +279,7 @@ def generate_scenarios_for_campaign(campaign_id: int) -> list[TestScenario]:
                     "seulement si l’attribut placeholder exact figure dans les observations de cette page. "
                     "Conserve les variables {nom} exactement comme fournies et utilise-les uniquement "
                     "comme valeur d’une action fill. Chaque scénario démarre dans une session vierge. "
+                    "Pour identifier un produit ou un libellé, utilise le texte réel fourni dans l’objectif. "
                     "Pour relever un total affiché, utilise read_text avec un sélecteur ciblé. "
                     "Une lecture est une observation ; ajoute une assertion distincte pour le verdict."
                 ),

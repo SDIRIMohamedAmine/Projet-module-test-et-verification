@@ -115,10 +115,14 @@ def test_campaign_from_browser(tmp_path):
         steps = [
             {"action": "goto", "target": {"value": target + "/login"}},
             {"action": "fill", "target": {"value": "#username"}, "value": "{test_user}"},
-            {"action": "fill", "target": {"value": "#password"}, "value": "{test_password}"},
+            {"action": "fill", "target": {"value": "#password"}, "value": "{test_password}",
+             "expect": {"type": "value_equals", "value": "{test_password}"}},
             {"action": "click", "target": {"value": "button[type=submit]"},
              "expect": {"type": "url_equals", "value": target + "/dashboard"}},
             {"action": "read_text", "target": {"value": ".ok"}},
+            {"action": "goto", "value": target + "/missing-test-page",
+             "expect": {"type": "http_status", "value": "200"}},
+            {"action": "goto", "value": target + "/logout"},
         ]
         scenario.get_by_role("textbox", name="Étapes (JSON)").fill(json.dumps(steps))
         scenario.get_by_role("button", name="Enregistrer").click()
@@ -127,6 +131,14 @@ def test_campaign_from_browser(tmp_path):
         expect(report).to_be_visible(timeout=45_000)
         report_body = page.request.get(platform + report.get_attribute("href")).text()
         assert "Texte relevé : Connexion réussie." in report_body
+        assert "Valeur de test conforme" in report_body
+        result = page.request.get(platform + "/api/campaigns/2/results").json()["by_scenario"]
+        outcome = next(iter(result.values()))
+        assert [step["status"] for step in outcome["step_outcomes"]][-2:] == ["FAILED", "SKIPPED"]
+        log_id = next(evidence["id"] for evidence in outcome["evidences"] if evidence["type"] == "log")
+        assert f"HTTP 404 — GET {target}/missing-test-page" in page.request.get(
+            platform + f"/api/evidences/{log_id}/file"
+        ).text()
         assert "screenshot #" not in report_body
         assert "trace #" not in report_body
         assert "video #" not in report_body

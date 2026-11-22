@@ -298,6 +298,7 @@ def _execute_scenario(
 
     console_errors: list[str] = []
     failed_requests: list[str] = []
+    http_errors: list[str] = []
     last_status: int | None = None
 
     def on_console(msg):
@@ -310,9 +311,17 @@ def _execute_scenario(
     def on_request_failed(req):
         failed_requests.append(mask_secrets(f"{req.url[:300]} — {req.failure}", secrets))
 
+    def on_response(response):
+        if response.status >= 400 and response.request.resource_type in ("document", "xhr", "fetch"):
+            url = response.url.split("?", 1)[0].split("#", 1)[0]
+            entry = mask_secrets(f"HTTP {response.status} — {response.request.method} {url}", secrets)
+            if entry not in http_errors:
+                http_errors.append(entry)
+
     page.on("console", on_console)
     page.on("pageerror", on_page_error)
     page.on("requestfailed", on_request_failed)
+    page.on("response", on_response)
 
     outcomes: list[StepOutcome] = []
     has_verified_expect = False
@@ -381,8 +390,19 @@ def _execute_scenario(
                     last_status = nav_status
             if expect:
                 has_verified_expect = True
-                ok, detail = _check_expect(page, expect, last_status, console_errors, target)
+                if (
+                    step.action == "fill" and value != fill_value
+                    and expect.get("type") == "value_equals"
+                    and expect.get("value") == value
+                ):
+                    actual = _locator_for(page, target).first.input_value(timeout=STEP_TIMEOUT_MS)
+                    ok = actual == fill_value
+                    detail = "Valeur de test conforme" if ok else "Valeur de test inattendue"
+                else:
+                    ok, detail = _check_expect(page, expect, last_status, console_errors, target)
                 outcome_status = "PASSED" if ok else "FAILED"
+                if not ok:
+                    blocked = True
                 message = f"{message} · {detail}" if message else detail
             elif not message:
                 message = f"Étape '{step.action}' exécutée"
@@ -430,6 +450,8 @@ def _execute_scenario(
         runtime_warnings.append(f"{len(console_errors)} erreur(s) JS")
     if failed_requests:
         runtime_warnings.append(f"{len(failed_requests)} requête(s) échouée(s)")
+    if http_errors:
+        runtime_warnings.append(f"{len(http_errors)} erreur(s) HTTP distincte(s)")
 
     verdict = combine_outcomes(outcomes, has_verified_expect, runtime_warnings)
 
@@ -444,6 +466,9 @@ def _execute_scenario(
         "",
         "== Requêtes échouées ==",
         *failed_requests,
+        "",
+        "== Réponses HTTP en erreur ==",
+        *http_errors,
         "",
         "== Étapes ==",
         *[f"{o.step_order}. [{o.status}] {o.action} — {o.message}" for o in outcomes],
