@@ -5,6 +5,7 @@ from flask import Blueprint, current_app, jsonify, request, send_file
 
 from ..models import Evidence, TestCampaign, TestResult, TestScenario, db
 from ..services.executor import execute_campaign
+from ..services.scenario_validation import saved_scenario_errors
 from ..tasks import run_in_background
 
 bp = Blueprint("execution", __name__)
@@ -25,6 +26,10 @@ def start_execution(campaign_id):
     ]
     if not approved:
         return jsonify({"error": "Aucun scénario approuvé à exécuter"}), 409
+    for scenario in approved:
+        errors = saved_scenario_errors(scenario)
+        if errors:
+            return jsonify({"error": f"{scenario.title} — {errors[0]}", "validation_errors": errors}), 409
 
     campaign.status = "executing"
     campaign.task_stage = "queued"

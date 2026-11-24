@@ -7,6 +7,7 @@ from threading import Thread
 
 from flask import send_from_directory
 from playwright.sync_api import expect, sync_playwright
+import pytest
 from werkzeug.serving import make_server
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -15,7 +16,91 @@ sys.path.insert(0, str(ROOT / "backend"))
 
 from app import create_app
 from app.config import Config
+from app.services.executor import _covering_dialog, _read_near_label, _resolve_action_target
+from app.services.explorer import EXTRACT_ELEMENTS_JS
+from app.services.scenario_generator import _review_scenarios, _sanitize_scenarios
 from demo_app.app import app as demo
+
+
+def test_generated_login_is_checked_against_exploration():
+    base = "http://127.0.0.1:5001"
+    login = base + "/login"
+    scenarios = _sanitize_scenarios({"scenarios": [{"title": "Connexion", "steps": [
+        {"action": "goto", "target": {"value": login}},
+        {"action": "fill", "value": "{test_password}", "target": {"value": "#password"}},
+        {"action": "click", "target": {"strategy": "role", "value": "button",
+         "fallback": {"strategy": "text", "value": "Se connecter"}},
+         "expect": {"type": "url_equals", "value": login}},
+        {"action": "assert", "target": {"value": "body"},
+         "expect": {"type": "visible", "value": "Indicateur utilisateur connecté"}},
+    ]}]})
+    observed = [{"url": login, "elements": [{"kind": "button", "text": "Se connecter"}]}]
+    errors = _review_scenarios(scenarios, base, observed)
+    assert any("sélecteur CSS" in error for error in errors)
+    assert any("résultat de la connexion" in error for error in errors)
+    steps = scenarios[0]["steps"]
+    assert steps[0]["value"] == login
+    assert steps[2]["target"]["value"] == "button=Se connecter"
+    steps[2]["expect"] = {"type": "url_equals", "value": base + "/dashboard"}
+    steps.pop()
+    assert not _review_scenarios(scenarios, base, observed)
+
+
+def test_live_page_observations_and_locators():
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        page = browser.new_page()
+        page.set_content("""
+            <h1>Checkout</h1>
+            <label for="email">Adresse e-mail</label><input id="email" type="email">
+            <input id="nickname" type="text"><input id="password" type="password">
+            <section><label>Quantité</label><div><button>−</button><span>1</span>
+                <button onclick="this.previousElementSibling.textContent = '2'">+</button></div></section>
+            <div><strong>Total</strong><span>9000.00 TND</span></div>
+            <button id="checkout">Confirmer la réservation</button>
+            <div role="dialog" style="display:none;position:fixed;inset:0;background:white">
+                <h2>Connexion requise</h2><button>Connexion</button>
+            </div>
+        """)
+        elements = page.evaluate(EXTRACT_ELEMENTS_JS)
+        assert any(el["kind"] == "button" and el.get("text") == "+" and "1" in el.get("context", "") for el in elements)
+        assert any(el["kind"] == "value" and el.get("context") == "Total9000.00 TND" for el in elements)
+
+        field, fallback = _resolve_action_target(page, {"strategy": "placeholder", "value": "Adresse e-mail"}, "fill")
+        assert fallback == "label"
+        field.fill("qa@example.test")
+        generic = {"strategy": "role", "value": "textbox"}
+        email, _ = _resolve_action_target(page, generic, "fill", "{account_1_email}")
+        password, _ = _resolve_action_target(page, generic, "fill", "{account_1_password}")
+        assert email.get_attribute("id") == "email"
+        assert password.get_attribute("id") == "password"
+        with pytest.raises(ValueError, match="Plusieurs contrôles"):
+            _resolve_action_target(page, generic, "fill", "Lina")
+        page.evaluate("""() => {
+            const button = document.createElement('button');
+            button.textContent = 'Modifier';
+            button.onclick = () => { button.textContent = 'Enregistrer'; };
+            document.body.append(button);
+        }""")
+        edit, _ = _resolve_action_target(page, {"strategy": "css", "value": "button=Modifier"}, "click")
+        edit.click()
+        expect(page.locator('button:text-is("Enregistrer")')).to_be_visible()
+        increment, fallback = _resolve_action_target(page, {
+            "strategy": "css", "value": ".old-increment", "fallback": {"strategy": "role", "value": "button=+"},
+        }, "click")
+        assert fallback == "role"
+        increment.click()
+        assert _read_near_label(page, "Quantité") == "2"
+        assert _read_near_label(page, "Total") == "9000.00 TND"
+        with pytest.raises(ValueError, match="Plusieurs contrôles"):
+            _resolve_action_target(page, {"strategy": "css", "value": "button"}, "click")
+        page.get_by_role("button", name="Confirmer la réservation").evaluate(
+            "button => button.addEventListener('click', () => document.querySelector('[role=dialog]').style.display = 'block')"
+        )
+        checkout = page.locator("#checkout")
+        checkout.click()
+        assert _covering_dialog(checkout) == "Connexion requise"
+        browser.close()
 
 
 @contextmanager
@@ -142,4 +227,11 @@ def test_campaign_from_browser(tmp_path):
         assert "screenshot #" not in report_body
         assert "trace #" not in report_body
         assert "video #" not in report_body
+        scenario_id = next(iter(result))
+        steps[3]["expect"]["value"] = target + "/login"
+        invalid = page.request.put(platform + f"/api/scenarios/{scenario_id}", data={"steps": steps})
+        assert invalid.ok and invalid.json()["validation_errors"]
+        approval = page.request.post(platform + f"/api/scenarios/{scenario_id}/approval",
+                                     data={"status": "approved"})
+        assert approval.status == 409
         browser.close()

@@ -2,6 +2,8 @@
 from flask import Blueprint, jsonify, request
 
 from ..models import TestScenario, TestStep, db
+from ..services.scenario_generator import FALLBACK_STRATEGIES, VALID_ACTIONS, VALID_EXPECTS, VALID_STRATEGIES
+from ..services.scenario_validation import saved_scenario_errors
 
 bp = Blueprint("scenarios", __name__)
 
@@ -32,6 +34,7 @@ def _scenario_dict(s: TestScenario, detail: bool = False) -> dict:
     }
     if detail:
         data["steps"] = [_step_dict(st) for st in sorted(s.steps, key=lambda x: x.step_order)]
+        data["validation_errors"] = saved_scenario_errors(s)
         if s.result:
             data["result"] = {
                 "id": s.result.id,
@@ -90,12 +93,6 @@ def update_scenario(scenario_id):
         steps_data = data.get("steps")
         if not isinstance(steps_data, list) or not steps_data:
             return jsonify({"error": "Au moins une étape est requise"}), 400
-        VALID_ACTIONS = {"goto", "click", "fill", "select", "check", "uncheck", "press", "wait", "assert", "read_text"}
-        VALID_STRATEGIES = {"role", "label", "placeholder", "text", "css"}
-        VALID_EXPECTS = {
-            "visible", "hidden", "text_contains", "url_matches", "url_equals",
-            "http_status", "no_console_error", "value_equals", "title_equals",
-        }
         cleaned = []
         for idx, step in enumerate(steps_data, start=1):
             if not isinstance(step, dict):
@@ -105,8 +102,17 @@ def update_scenario(scenario_id):
                 return jsonify({"error": f"Action invalide à l'étape {idx} : {action}"}), 400
             target = step.get("target") if isinstance(step.get("target"), dict) else {}
             strategy = str(target.get("strategy") or "css").lower()
-            if strategy not in VALID_STRATEGIES:
+            if strategy not in VALID_STRATEGIES and not (strategy == "near" and action == "read_text"):
                 return jsonify({"error": f"Stratégie de localisation invalide à l'étape {idx}"}), 400
+            locator = {"strategy": strategy, "value": str(target.get("value") or "")}
+            fallback = target.get("fallback")
+            if fallback is not None:
+                if (
+                    strategy == "near" or not isinstance(fallback, dict)
+                    or str(fallback.get("strategy")) not in FALLBACK_STRATEGIES or not fallback.get("value")
+                ):
+                    return jsonify({"error": f"Localisateur de repli invalide à l'étape {idx}"}), 400
+                locator["fallback"] = {"strategy": fallback["strategy"], "value": str(fallback["value"])}
             expect = step.get("expect")
             if expect is not None:
                 if not isinstance(expect, dict) or str(expect.get("type", "")).lower() not in VALID_EXPECTS:
@@ -115,7 +121,7 @@ def update_scenario(scenario_id):
             cleaned.append(
                 {
                     "action": action,
-                    "target": {"strategy": strategy, "value": str(target.get("value") or "")},
+                    "target": locator,
                     "value": str(step.get("value") or ""),
                     "expect": expect,
                     "expected_observation": str(step.get("expected_observation") or "") or None,
@@ -155,8 +161,10 @@ def set_approval(scenario_id):
     status = data.get("status")
     if status not in VALID_APPROVAL:
         return jsonify({"error": f"Statut invalide. Valeurs : {sorted(VALID_APPROVAL)}"}), 400
-    if status == "approved" and not scenario.steps:
-        return jsonify({"error": "Impossible d'approuver un scénario sans étape"}), 400
+    if status == "approved":
+        errors = saved_scenario_errors(scenario)
+        if errors:
+            return jsonify({"error": errors[0], "validation_errors": errors}), 409
     scenario.approval_status = status
     db.session.commit()
     return jsonify(_scenario_dict(scenario, detail=True))
@@ -180,8 +188,8 @@ def approve_all(campaign_id):
     )
     count = 0
     for s in scenarios:
-        if s.steps:
+        if not saved_scenario_errors(s):
             s.approval_status = "approved"
             count += 1
     db.session.commit()
-    return jsonify({"approved": count})
+    return jsonify({"approved": count, "needs_review": len(scenarios) - count})

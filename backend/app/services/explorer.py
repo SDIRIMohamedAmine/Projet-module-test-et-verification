@@ -11,6 +11,7 @@ EXTRACT_ELEMENTS_JS = """
 () => {
   const out = [];
   const seen = new Set();
+  const clean = value => (value || '').trim().replace(/\\s+/g, ' ').slice(0, 120);
   const describe = (el, kind) => {
     try {
       const rect = el.getBoundingClientRect();
@@ -19,6 +20,7 @@ EXTRACT_ELEMENTS_JS = """
       const text = (el.innerText || el.textContent || '').trim().replace(/\\s+/g, ' ').slice(0, 120);
       if (text) info.text = text;
       if (el.id) info.id = el.id;
+      if (el.dataset.testid) info.testid = el.dataset.testid;
       const name = el.getAttribute('name');
       if (name) info.name = name;
       const aria = el.getAttribute('aria-label');
@@ -41,21 +43,31 @@ EXTRACT_ELEMENTS_JS = """
       if (el.labels && el.labels.length) {
         info.label = (el.labels[0].innerText || '').trim().slice(0, 120);
       }
+      if (['field', 'button', 'label', 'value'].includes(kind)) {
+        const nearby = clean(el.parentElement?.innerText);
+        if (nearby && nearby !== info.text) info.context = nearby;
+      }
       return info;
     } catch (e) { return null; }
   };
   const add = (el, kind) => {
     const info = describe(el, kind);
     if (!info) return;
-    const key = kind + '|' + (info.id || info.name || info.text || info.href || info.placeholder || '') + '|' + (info.type || '');
+    const key = JSON.stringify([kind, info.id, info.testid, info.name, info.text, info.href, info.placeholder, info.type, info.context]);
     if (seen.has(key)) return;
     seen.add(key);
     out.push(info);
   };
-  document.querySelectorAll('a[href]').forEach(a => add(a, 'link'));
-  document.querySelectorAll('button, input[type=button], input[type=submit], [role=button]').forEach(b => add(b, 'button'));
   document.querySelectorAll('input:not([type=hidden]), textarea, select').forEach(i => add(i, 'field'));
+  document.querySelectorAll('button, input[type=button], input[type=submit], [role=button]').forEach(b => add(b, 'button'));
+  document.querySelectorAll('dialog, [role=dialog], [aria-modal=true]').forEach(el => add(el, 'dialog'));
+  document.querySelectorAll('h1,h2,h3,[role=heading]').forEach(el => add(el, 'heading'));
+  document.querySelectorAll('label,legend,dt').forEach(el => add(el, 'label'));
+  document.querySelectorAll('output, dd, [data-testid], span').forEach(el => {
+    if (el.matches('output, dd, [data-testid]') || /\\d/.test(clean(el.innerText))) add(el, 'value');
+  });
   document.querySelectorAll('form').forEach(f => add(f, 'form'));
+  document.querySelectorAll('a[href]').forEach(a => add(a, 'link'));
   document.querySelectorAll('nav a, menu a').forEach(n => add(n, 'nav'));
   return out.slice(0, 200);
 }

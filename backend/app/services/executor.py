@@ -42,24 +42,114 @@ def _navigation_url(value: str, target: dict, base_url: str) -> str:
     return urljoin(base_url, destination)
 
 
-def _locator_for(page, target: dict):
+def _locator_for(page, target: dict, *, exact=False):
     strategy = (target or {}).get("strategy", "css")
     value = (target or {}).get("value", "")
     if not value:
         raise ValueError("Cible de l'étape vide")
+    if strategy == "css" and re.fullmatch(
+        r"(button|link|textbox|checkbox|combobox|radio|heading|dialog|tab|menuitem|option)=.+", value
+    ):
+        strategy = "role"
+        exact = True
     if strategy == "role":
-        # value: "role=nom" ou "nom" (rôle par défaut déduit)
+        # value: "role=nom" ou "role"
         if "=" in value:
             role, name = value.split("=", 1)
-            return page.get_by_role(role.strip(), name=name.strip() or None)
+            return page.get_by_role(role.strip(), name=name.strip() or None, exact=exact)
         return page.get_by_role(value.strip())
     if strategy == "label":
-        return page.get_by_label(value)
+        return page.get_by_label(value, exact=exact)
     if strategy == "placeholder":
-        return page.get_by_placeholder(value)
+        return page.get_by_placeholder(value, exact=exact)
     if strategy == "text":
-        return page.get_by_text(value, exact=False)
+        return page.get_by_text(value, exact=exact)
+    if strategy == "testid":
+        return page.get_by_test_id(value)
     return page.locator(value)
+
+
+def _resolve_action_target(page, target, action, value=""):
+    from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+
+    fallback = target.get("fallback")
+    inferred_field_type = None
+    if action == "fill" and (target.get("strategy"), target.get("value")) in {
+        ("role", "textbox"), ("css", "textbox"), ("css", "input"),
+    } and re.fullmatch(r"\{[A-Za-z_][A-Za-z0-9_]*\}", value):
+        words = set(value[1:-1].lower().split("_"))
+        field_type = (
+            "password" if words & {"password", "passwd", "pwd"}
+            else "email" if words & {"email", "mail"} else None
+        )
+        if field_type:
+            inferred_field_type = field_type
+            target = {"strategy": "css", "value": f"input[type='{field_type}']"}
+            fallback = None
+
+    if not fallback and action == "fill":
+        equivalent = {"placeholder": "label", "label": "placeholder"}.get(target.get("strategy"))
+        if equivalent:
+            fallback = {"strategy": equivalent, "value": target["value"]}
+    visible = page.locator(":visible")
+    locator = _locator_for(page, target).and_(visible)
+    try:
+        locator.first.wait_for(state="visible", timeout=1500 if fallback else STEP_TIMEOUT_MS)
+    except PlaywrightTimeoutError:
+        if not fallback:
+            raise
+        locator = _locator_for(page, fallback, exact=True).and_(visible)
+        locator.first.wait_for(state="visible", timeout=STEP_TIMEOUT_MS)
+        strategy = fallback["strategy"]
+    else:
+        strategy = f"type={inferred_field_type}" if inferred_field_type else None
+    if locator.count() != 1:
+        raise ValueError("Plusieurs contrôles visibles correspondent à la cible ; précisez le sélecteur")
+    return locator, strategy
+
+
+def _covering_dialog(locator):
+    return locator.evaluate(
+        """target => {
+            const rect = target.getBoundingClientRect();
+            let hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
+            if (!hit || target.contains(hit) || hit.contains(target)) return '';
+            const dialog = hit.closest('dialog, [role=dialog], [aria-modal=true]');
+            for (let node = dialog || hit; node; node = node.parentElement) {
+                const bounds = node.getBoundingClientRect();
+                const fullscreen = getComputedStyle(node).position === 'fixed' &&
+                    bounds.width >= innerWidth * .9 && bounds.height >= innerHeight * .9;
+                if (node === dialog || fullscreen) {
+                    const heading = node.querySelector('h1,h2,h3,[role=heading]');
+                    return (heading?.innerText || node.getAttribute('aria-label') || 'dialogue sans titre')
+                        .trim().slice(0, 100);
+                }
+            }
+            return '';
+        }""",
+        timeout=1000,
+    )
+
+
+def _read_near_label(page, label):
+    anchor = page.get_by_text(label, exact=True).and_(page.locator(":visible"))
+    return anchor.evaluate(
+        r"""label => {
+            for (const group of [label.parentElement, label.parentElement?.parentElement]) {
+                if (!group || group.matches('body, main, form')) break;
+                const values = [...group.querySelectorAll('span, output, dd, strong, b, p, [data-testid]')]
+                    .filter(el => el !== label && !el.contains(label) && !label.contains(el)
+                        && !el.childElementCount && el.getClientRects().length
+                        && getComputedStyle(el).visibility === 'visible')
+                    .map(el => el.innerText.trim())
+                    .filter(text => /^\s*[+−-]?\d[\d., \u00a0\u202f]*(?:\s*(?:[A-Z]{3}|[€$£]))?\s*$/.test(text));
+                if (values.length === 1) return values[0];
+                if (values.length > 1) break;
+            }
+            throw new Error('Aucun montant ou nombre unique à proximité du libellé');
+        }""",
+        timeout=STEP_TIMEOUT_MS,
+    )
 
 
 def _check_expect(
@@ -68,6 +158,7 @@ def _check_expect(
     last_status: int | None,
     console_errors: list,
     target: dict | None = None,
+    resolved_locator=None,
 ) -> tuple[bool, str]:
     etype = expect.get("type")
     value = str(expect.get("value", ""))
@@ -76,7 +167,7 @@ def _check_expect(
             loc = _locator_for(page, {"strategy": "css", "value": value})
             sel = value
         else:
-            loc = _locator_for(page, target or {"strategy": "css", "value": "body"})
+            loc = resolved_locator or _locator_for(page, target or {"strategy": "css", "value": "body"})
             sel = (target or {}).get("value") or "body"
         loc.first.wait_for(state="visible", timeout=STEP_TIMEOUT_MS)
         return True, f"Élément visible : {sel}"
@@ -127,7 +218,7 @@ def _check_expect(
             return False, f"{len(console_errors)} erreur(s) JS : {console_errors[0][:200]}"
         return True, "Aucune erreur JavaScript"
     if etype == "value_equals":
-        loc = _locator_for(page, target or {"strategy": "css", "value": value})
+        loc = resolved_locator or _locator_for(page, target or {"strategy": "css", "value": value})
         actual = loc.input_value(timeout=STEP_TIMEOUT_MS)
         if actual == value:
             return True, f"Valeur conforme : {value!r}"
@@ -135,7 +226,7 @@ def _check_expect(
     return False, f"Type de vérification inconnu : {etype}"
 
 
-def _perform_action(page, action: str, target: dict, value: str, parameters: dict, secrets: list[str]) -> int | None:
+def _perform_action(page, action: str, locator, value: str) -> int | None:
     """Réalise l'action, retourne le statut HTTP de la dernière navigation si pertinent."""
     timeout = STEP_TIMEOUT_MS
     if action == "goto":
@@ -146,21 +237,19 @@ def _perform_action(page, action: str, target: dict, value: str, parameters: dic
             pass
         return resp.status if resp else None
     if action == "click":
-        _locator_for(page, target).first.click(timeout=timeout)
+        locator.click(timeout=timeout)
         return None
     if action == "fill":
-        masked = mask_secrets(value, secrets)
-        _locator_for(page, target).first.fill(value, timeout=timeout)
-        _ = masked
+        locator.fill(value, timeout=timeout)
         return None
     if action == "select":
-        _locator_for(page, target).first.select_option(value, timeout=timeout)
+        locator.select_option(value, timeout=timeout)
         return None
     if action == "check":
-        _locator_for(page, target).first.check(timeout=timeout)
+        locator.check(timeout=timeout)
         return None
     if action == "uncheck":
-        _locator_for(page, target).first.uncheck(timeout=timeout)
+        locator.uncheck(timeout=timeout)
         return None
     if action == "press":
         page.keyboard.press(value or "Enter")
@@ -375,17 +464,22 @@ def _execute_scenario(
         outcome_status = "PASSED"
         message = ""
         try:
+            locator = None
+            fallback_strategy = None
+            if step.action in {"click", "fill", "select", "check", "uncheck", "read_text"} and target.get("strategy") != "near":
+                locator, fallback_strategy = _resolve_action_target(page, target, step.action, value)
             if step.action == "goto":
                 fill_value = _navigation_url(value, target, base_url)
                 if not is_url_allowed(fill_value, allowed_hosts, base_url):
                     raise ValueError("URL de navigation hors du périmètre autorisé")
             if step.action == "read_text":
-                locator = _locator_for(page, target)
-                locator.wait_for(state="visible", timeout=STEP_TIMEOUT_MS)
-                observed_text = locator.inner_text(timeout=STEP_TIMEOUT_MS).strip()
+                if target.get("strategy") == "near":
+                    observed_text = _read_near_label(page, target["value"])
+                else:
+                    observed_text = locator.inner_text(timeout=STEP_TIMEOUT_MS).strip()
                 message = f"Texte relevé : {observed_text[:500]}"
             else:
-                nav_status = _perform_action(page, step.action, target, fill_value, params, secrets)
+                nav_status = _perform_action(page, step.action, locator, fill_value)
                 if nav_status is not None:
                     last_status = nav_status
             if expect:
@@ -395,17 +489,19 @@ def _execute_scenario(
                     and expect.get("type") == "value_equals"
                     and expect.get("value") == value
                 ):
-                    actual = _locator_for(page, target).first.input_value(timeout=STEP_TIMEOUT_MS)
+                    actual = locator.input_value(timeout=STEP_TIMEOUT_MS)
                     ok = actual == fill_value
                     detail = "Valeur de test conforme" if ok else "Valeur de test inattendue"
                 else:
-                    ok, detail = _check_expect(page, expect, last_status, console_errors, target)
+                    ok, detail = _check_expect(page, expect, last_status, console_errors, target, locator)
                 outcome_status = "PASSED" if ok else "FAILED"
                 if not ok:
                     blocked = True
                 message = f"{message} · {detail}" if message else detail
             elif not message:
                 message = f"Étape '{step.action}' exécutée"
+            if fallback_strategy:
+                message += f" · Localisateur de repli trouvé sur la page ({fallback_strategy})"
         except Exception as exc:  # noqa: BLE001 — élément absent / timeout
             outcome_status = "ERROR"
             message = str(exc)
@@ -414,6 +510,13 @@ def _execute_scenario(
                 try:
                     message = f"{message[:350]}\nChamps observés : {_visible_form_fields(page)}"
                 except Exception:  # noqa: BLE001 — page indisponible
+                    pass
+            if step.action == "click" and locator is not None:
+                try:
+                    dialog = _covering_dialog(locator)
+                    if dialog:
+                        message = f"Clic bloqué par un dialogue visible : {dialog}\n{message}"
+                except Exception:  # noqa: BLE001 — page ou cible indisponible
                     pass
 
         # capture par étape
