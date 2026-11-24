@@ -22,12 +22,13 @@ type Campaign = {
   created_at: string
 }
 type Step = {
-  action: string; parameters: { target?: { strategy: string; value: string }; value?: string
+  action: string; parameters: { target?: { strategy: string; value: string; fallback?: { strategy: string; value: string } }; value?: string
     expect?: { type: string; value: string } | null }; expected_observation?: string
 }
 type Scenario = {
   id: number; title: string; objective: string | null; preconditions: string | null
   expected_result: string | null; approval_status: string; source: string; kind: string; steps: Step[]
+  validation_errors?: string[]
 }
 type Outcome = { step_order: number; action: string; status: string; message: string }
 type Result = { status: string; actual_result: string; step_outcomes: Outcome[]
@@ -299,6 +300,7 @@ function App() {
   const credentialNames = target?.credential_names ?? []
   const locked = busy || isRunning
   const approvals = scenarios.filter(s => s.approval_status === 'approved').length
+  const hasInvalidApproval = scenarios.some(s => s.approval_status === 'approved' && s.validation_errors?.length)
 
   return <>
     <header className="top"><div className="brand"><span className="mark" aria-hidden="true">▣</span> Agent E2E</div></header>
@@ -379,7 +381,7 @@ function App() {
                 {['explored', 'failed'].includes(campaign.status) && pages.length > 0 && scenarios.length === 0 &&
                   <button className="primary" disabled={locked} onClick={() => void start('generate-scenarios')}>Générer les scénarios</button>}
                 {approvals > 0 && ['scenarios_ready', 'completed', 'failed'].includes(campaign.status) &&
-                  <button className="primary" disabled={locked} onClick={() => void start('execute')}>Exécuter les scénarios approuvés ({approvals})</button>}
+                  <button className="primary" disabled={locked || hasInvalidApproval} onClick={() => void start('execute')}>Exécuter les scénarios approuvés ({approvals})</button>}
                 <button disabled={busy} onClick={clearCampaign}>Nouvelle campagne</button>
               </div>
             </section>
@@ -396,11 +398,15 @@ function App() {
                   <pre>{JSON.stringify({ console: page.console_errors, réseau: page.failed_requests }, null, 2)}</pre>}
               </details>)}</section>}
             {tab === 'scenarios' && <section className="panel"><div className="between"><h2>Scénarios ({scenarios.length})</h2>
-              {scenarios.some(s => s.approval_status === 'pending') && <button disabled={locked} onClick={() => void run(() =>
+              {scenarios.some(s => s.approval_status === 'pending' && !s.validation_errors?.length) && <button disabled={locked} onClick={() => void run(() =>
                 scenarioAction(`/campaigns/${campaignId}/scenarios/approve-all`, 'POST'))}>Approuver les scénarios en attente</button>}</div>
               {scenarios.length === 0 && <p className="muted">Aucun scénario généré.</p>}
               {scenarios.map(scenario => <article className="item" key={scenario.id}>
                 <div className="between"><h3>{scenario.title}</h3><span className="pill">{label(scenario.approval_status)}</span></div>
+                {!!scenario.validation_errors?.length && <div className="alert">
+                  <strong>À corriger avant exécution</strong>
+                  <ul>{scenario.validation_errors.map(issue => <li key={issue}>{issue}</li>)}</ul>
+                </div>}
                 <p className="muted">{scenario.kind === 'negative' ? 'Test négatif' : 'Test positif'} · {scenario.source === 'hypothesis' ? 'Hypothèse' : 'Observation'}</p>
                 {editingScenario === scenario.id ? <form onSubmit={event => void saveScenario(event, scenario)}>
                   <label>Titre<input name="title" required defaultValue={scenario.title} /></label>
@@ -409,17 +415,20 @@ function App() {
                   <label>Résultat attendu<textarea name="expected_result" defaultValue={scenario.expected_result ?? ''} /></label>
                   <label>Étapes (JSON)<textarea className="code" rows={12} name="steps" required defaultValue={JSON.stringify(
                     scenario.steps.map(step => ({ action: step.action, ...step.parameters, expected_observation: step.expected_observation })), null, 2)} /></label>
-                  <p className="muted">Pour relever un total, utilisez <code>read_text</code> et ciblez l’élément qui l’affiche. Le texte relevé apparaît dans le rapport.</p>
+                  <p className="muted">Pour relever un montant voisin d’un libellé, utilisez <code>read_text</code> avec <code>near</code> et le libellé exact. Un localisateur de repli doit désigner le même contrôle.</p>
                   <div className="actions"><button className="primary" disabled={locked}>Enregistrer</button><button type="button" onClick={() => setEditingScenario(null)}>Annuler</button></div>
                 </form> : <>
                   {scenario.objective && <p>{scenario.objective}</p>}
                   {scenario.preconditions && <p className="muted">{scenario.preconditions}</p>}
                   {scenario.expected_result && <p><strong>Résultat attendu</strong> {scenario.expected_result}</p>}
                   <details><summary>Étapes ({scenario.steps.length})</summary><ol>{scenario.steps.map((step, index) =>
-                    <li key={index}><strong>{step.action}</strong> {step.parameters.target?.value} {step.expected_observation && <small>· {step.expected_observation}</small>}</li>)}</ol></details>
+                    <li key={index}><strong>{step.action}</strong> {step.parameters.target?.value}
+                      {step.parameters.target?.fallback && <small> · Repli : {step.parameters.target.fallback.value}</small>}
+                      {step.expected_observation && <small> · {step.expected_observation}</small>}
+                    </li>)}</ol></details>
                   <div className="actions">
                     <button disabled={locked} onClick={() => setEditingScenario(scenario.id)}>Modifier</button>
-                    {scenario.approval_status !== 'approved' && <button disabled={locked} onClick={() => void run(() =>
+                    {scenario.approval_status !== 'approved' && <button disabled={locked || !!scenario.validation_errors?.length} onClick={() => void run(() =>
                       scenarioAction(`/scenarios/${scenario.id}/approval`, 'POST', { status: 'approved' }))}>Approuver</button>}
                     {scenario.approval_status !== 'disabled' && <button disabled={locked} onClick={() => void run(() =>
                       scenarioAction(`/scenarios/${scenario.id}/approval`, 'POST', { status: 'disabled' }))}>Désactiver</button>}
